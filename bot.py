@@ -40,7 +40,7 @@ class PhotoGroup:
     media_group_id: Optional[str]
     file_ids: List[str]
     message_ids: List[int]
-    last_date: datetime
+    created_at: datetime
 
 
 class PhotoArchiveBot:
@@ -65,11 +65,12 @@ class PhotoArchiveBot:
             self.groups[key] = []
         return self.groups[key]
 
-    def _cleanup(self, key: Tuple[int, Optional[int]], now: datetime) -> None:
+    def _cleanup(self, key: Tuple[int, Optional[int]]) -> None:
         queue = self.groups.get(key)
         if not queue:
             return
-        while queue and (now - queue[0].last_date) > PHOTO_TTL:
+        now = datetime.utcnow()
+        while queue and (now - queue[0].created_at) > PHOTO_TTL:
             queue.pop(0)
         if not queue:
             self.groups.pop(key, None)
@@ -82,23 +83,23 @@ class PhotoArchiveBot:
         queue = self._queue(key)
         media_group_id = message.media_group_id
         file_id = message.photo[-1].file_id
+        now = datetime.utcnow()
 
         if media_group_id and queue and queue[-1].media_group_id == media_group_id:
             group = queue[-1]
             group.file_ids.append(file_id)
             group.message_ids.append(message.message_id)
-            group.last_date = message.date
         else:
             queue.append(
                 PhotoGroup(
                     media_group_id=media_group_id,
                     file_ids=[file_id],
                     message_ids=[message.message_id],
-                    last_date=message.date,
+                    created_at=now,
                 )
             )
 
-        self._cleanup(key, message.date)
+        self._cleanup(key)
 
     async def _handle_document(self, message: Message) -> None:
         if self._skip_user(message):
@@ -118,21 +119,16 @@ class PhotoArchiveBot:
         if not queue:
             return
 
-        self._cleanup(key, message.date)
+        self._cleanup(key)
         queue = self.groups.get(key)
         if not queue:
             return
 
-        idx: Optional[int] = None
-        for i, g in enumerate(queue):
-            if g.last_date <= message.date and (message.date - g.last_date) <= PHOTO_TTL:
-                idx = i
-                break
-
-        if idx is None:
+        group = queue[0]
+        if group.message_ids and group.message_ids[-1] >= message.message_id:
             return
 
-        group = queue.pop(idx)
+        queue.pop(0)
 
         if len(group.file_ids) == 1:
             sent = await self.bot.send_photo(
