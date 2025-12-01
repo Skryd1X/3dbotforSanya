@@ -123,28 +123,27 @@ class PhotoArchiveBot:
         if not queue:
             return
 
-        eligible = [
-            g
-            for g in queue
-            if g.message_ids and g.message_ids[-1] < message.message_id
-        ]
-        if not eligible:
+        idx: Optional[int] = None
+        for i, g in enumerate(queue):
+            if g.last_date <= message.date and (message.date - g.last_date) <= PHOTO_TTL:
+                idx = i
+                break
+
+        if idx is None:
             return
 
-        target = max(eligible, key=lambda g: g.message_ids[-1])
-        queue.remove(target)
+        group = queue.pop(idx)
 
-        if len(target.file_ids) == 1:
+        if len(group.file_ids) == 1:
             sent = await self.bot.send_photo(
                 chat_id=message.chat.id,
-                photo=target.file_ids[0],
+                photo=group.file_ids[0],
                 caption=filename,
                 message_thread_id=message.message_thread_id,
             )
             new_ids = [sent.message_id]
-            last_date = sent.date
         else:
-            media = [InputMediaPhoto(media=fid) for fid in target.file_ids]
+            media = [InputMediaPhoto(media=fid) for fid in group.file_ids]
             media[0].caption = filename
             sent_messages = await self.bot.send_media_group(
                 chat_id=message.chat.id,
@@ -152,10 +151,9 @@ class PhotoArchiveBot:
                 message_thread_id=message.message_thread_id,
             )
             new_ids = [m.message_id for m in sent_messages]
-            last_date = sent_messages[-1].date
 
         if DELETE_ORIGINAL_PHOTO:
-            for mid in target.message_ids:
+            for mid in group.message_ids:
                 try:
                     await self.bot.delete_message(chat_id=message.chat.id, message_id=mid)
                 except Exception:
